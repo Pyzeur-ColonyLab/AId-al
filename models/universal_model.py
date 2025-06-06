@@ -52,21 +52,13 @@ class UniversalModel(BaseModel):
         logger.info(f"Initializing UniversalModel with {self.model_name}")
     
     def load_model(self, model_path: str = None):
-        """Load any HuggingFace model dynamically"""
+        """Load any HuggingFace model dynamically with improved error handling"""
         try:
             model_name = model_path or self.model_name
             logger.info(f"Loading model: {model_name}")
             
-            # Load tokenizer first
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                trust_remote_code=True,
-                padding_side="left"
-            )
-            
-            # Add special tokens if missing
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
+            # Load tokenizer first with error handling
+            self.tokenizer = self._load_tokenizer_safely(model_name)
             
             # Detect task type from model config
             self.task_type = self._detect_task_type(model_name)
@@ -81,28 +73,8 @@ class UniversalModel(BaseModel):
                     bnb_4bit_quant_type="nf4"
                 )
             
-            # Load model based on detected task
-            if self.task_type in ['text-generation', 'text2text-generation', 'conversational']:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                    device_map="auto" if torch.cuda.is_available() else None,
-                    quantization_config=quantization_config,
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True
-                )
-            elif self.task_type == 'text-classification':
-                self.model = AutoModelForSequenceClassification.from_pretrained(
-                    model_name,
-                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                    trust_remote_code=True
-                )
-            elif self.task_type == 'question-answering':
-                self.model = AutoModelForQuestionAnswering.from_pretrained(
-                    model_name,
-                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                    trust_remote_code=True
-                )
+            # Load model based on detected task with error handling
+            self.model = self._load_model_safely(model_name, quantization_config)
             
             # Create pipeline
             self._create_pipeline()
@@ -111,7 +83,122 @@ class UniversalModel(BaseModel):
             
         except Exception as e:
             logger.error(f"❌ Error loading model {model_name}: {e}")
-            raise
+            # Fallback to a simple working model
+            self._load_fallback_model()
+    
+    def _load_tokenizer_safely(self, model_name: str):
+        """Load tokenizer with multiple fallback strategies"""
+        try:
+            # Try standard loading first
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                padding_side="left"
+            )
+            logger.info(f"✅ Tokenizer loaded successfully")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Standard tokenizer loading failed: {e}")
+            
+            try:
+                # Try with use_fast=False (disable fast tokenizer)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_name,
+                    trust_remote_code=True,
+                    padding_side="left",
+                    use_fast=False
+                )
+                logger.info(f"✅ Tokenizer loaded with use_fast=False")
+                
+            except Exception as e2:
+                logger.warning(f"⚠️ Slow tokenizer loading failed: {e2}")
+                
+                try:
+                    # Try with legacy=False
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        model_name,
+                        trust_remote_code=True,
+                        padding_side="left",
+                        legacy=False
+                    )
+                    logger.info(f"✅ Tokenizer loaded with legacy=False")
+                    
+                except Exception as e3:
+                    logger.error(f"❌ All tokenizer loading strategies failed: {e3}")
+                    raise e3
+        
+        # Add special tokens if missing
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        return tokenizer
+    
+    def _load_model_safely(self, model_name: str, quantization_config):
+        """Load model with multiple fallback strategies"""
+        try:
+            # Try loading based on detected task
+            if self.task_type in ['text-generation', 'text2text-generation', 'conversational']:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                    device_map="auto" if torch.cuda.is_available() else None,
+                    quantization_config=quantization_config,
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True
+                )
+                logger.info(f"✅ CausalLM model loaded successfully")
+                
+            elif self.task_type == 'text-classification':
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                    trust_remote_code=True
+                )
+                logger.info(f"✅ Classification model loaded successfully")
+                
+            elif self.task_type == 'question-answering':
+                model = AutoModelForQuestionAnswering.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                    trust_remote_code=True
+                )
+                logger.info(f"✅ QA model loaded successfully")
+                
+            else:
+                # Default to CausalLM
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                    trust_remote_code=True
+                )
+                logger.info(f"✅ Default CausalLM model loaded successfully")
+                
+        except Exception as e:
+            logger.error(f"❌ Model loading failed: {e}")
+            raise e
+        
+        return model
+    
+    def _load_fallback_model(self):
+        """Load a simple fallback model if the main model fails"""
+        try:
+            logger.warning("🔄 Loading fallback model: gpt2")
+            
+            self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+            self.model = AutoModelForCausalLM.from_pretrained("gpt2")
+            self.task_type = "text-generation"
+            
+            self._create_pipeline()
+            
+            logger.info("✅ Fallback model (gpt2) loaded successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Even fallback model failed: {e}")
+            self.model = None
+            self.tokenizer = None
+            self.pipeline = None
     
     def _detect_task_type(self, model_name: str) -> str:
         """Detect the task type based on model name and config"""
@@ -135,6 +222,10 @@ class UniversalModel(BaseModel):
     def _create_pipeline(self):
         """Create appropriate pipeline based on task type"""
         try:
+            if not self.model or not self.tokenizer:
+                logger.error("❌ Cannot create pipeline: model or tokenizer not loaded")
+                return
+                
             pipeline_kwargs = {
                 "model": self.model,
                 "tokenizer": self.tokenizer,
@@ -157,13 +248,18 @@ class UniversalModel(BaseModel):
             
         except Exception as e:
             logger.error(f"❌ Error creating pipeline: {e}")
-            raise
+            # Set pipeline to None so bot can still work without AI responses
+            self.pipeline = None
     
     def predict(self, text: str, **kwargs) -> Dict[str, Any]:
         """Universal prediction method that adapts to any model type"""
         try:
             if not self.pipeline:
-                raise ValueError("Model not loaded")
+                return {
+                    'response': "Model not available. Please contact administrator.",
+                    'confidence': 0.0,
+                    'error': "No pipeline available"
+                }
             
             # Route to appropriate prediction method
             if self.task_type in ['text-generation', 'conversational']:
@@ -180,7 +276,7 @@ class UniversalModel(BaseModel):
         except Exception as e:
             logger.error(f"❌ Prediction error: {e}")
             return {
-                'response': f"Error processing request: {str(e)}",
+                'response': f"I'm having trouble processing your request. Please try a simpler message.",
                 'confidence': 0.0,
                 'error': str(e)
             }
@@ -194,7 +290,7 @@ class UniversalModel(BaseModel):
             # Generate response
             outputs = self.pipeline(
                 formatted_prompt,
-                max_new_tokens=kwargs.get('max_tokens', self.max_length),
+                max_new_tokens=kwargs.get('max_tokens', min(self.max_length, 256)),  # Reduced for safety
                 do_sample=kwargs.get('do_sample', True),
                 temperature=kwargs.get('temperature', 0.7),
                 top_p=kwargs.get('top_p', 0.9),
@@ -216,7 +312,7 @@ class UniversalModel(BaseModel):
             
         except Exception as e:
             logger.error(f"❌ Text generation error: {e}")
-            return {'response': "I couldn't generate a response.", 'confidence': 0.0, 'error': str(e)}
+            return {'response': "I couldn't generate a response. Please try again.", 'confidence': 0.0, 'error': str(e)}
     
     def _generate_text_to_text(self, text: str, **kwargs) -> Dict[str, Any]:
         """Handle text-to-text generation models (T5, BART, etc.)"""
