@@ -1,6 +1,6 @@
 """
 Universal Model Handler for any HuggingFace model
-Supports text generation, classification, and Q&A tasks
+Supports text generation, classification, Q&A tasks, and PEFT/LoRA models
 """
 
 import torch
@@ -25,6 +25,7 @@ class UniversalModel(BaseModel):
     """
     Universal model handler that can work with any HuggingFace model
     Automatically detects model type and configures appropriate pipelines
+    Supports PEFT/LoRA fine-tuned models
     """
     
     def __init__(self, model_name: str = None, model_config: Dict = None):
@@ -36,6 +37,7 @@ class UniversalModel(BaseModel):
         self.tokenizer = None
         self.model = None
         self.pipeline = None
+        self.is_peft_model = False
         
         # Device and optimization settings
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -51,40 +53,147 @@ class UniversalModel(BaseModel):
         
         logger.info(f"Initializing UniversalModel with {self.model_name}")
     
+    def _check_if_peft_model(self, model_name: str) -> bool:
+        """Check if the model is a PEFT/LoRA model by looking for adapter files"""
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi()
+            files = api.list_repo_files(model_name)
+            
+            # Check for PEFT/LoRA files
+            peft_files = ['adapter_model.safetensors', 'adapter_model.bin', 'adapter_config.json']
+            has_peft_files = any(f in files for f in peft_files)
+            
+            # Check for full model files
+            full_model_files = ['pytorch_model.bin', 'model.safetensors']
+            has_full_model = any(f in files for f in full_model_files)
+            
+            return has_peft_files and not has_full_model
+            
+        except Exception as e:
+            logger.warning(f"Could not check model type: {e}")
+            return False
+    
+    def _get_base_model_name(self, model_name: str) -> str:
+        """Get the base model name for a PEFT model"""
+        try:
+            from huggingface_hub import hf_hub_download
+            import json
+            
+            # Download adapter config to find base model
+            config_path = hf_hub_download(model_name, "adapter_config.json")
+            with open(config_path, 'r') as f:
+                adapter_config = json.load(f)
+            
+            base_model = adapter_config.get('base_model_name_or_path', 'mistralai/Mistral-7B-Instruct-v0.1')
+            logger.info(f"Found base model: {base_model}")
+            return base_model
+            
+        except Exception as e:
+            logger.warning(f"Could not determine base model, using default: {e}")
+            # Default to Mistral 7B Instruct for Code du Travail models
+            return "mistralai/Mistral-7B-Instruct-v0.1"
+    
     def load_model(self, model_path: str = None):
-        """Load any HuggingFace model dynamically with improved error handling"""
+        """Load any HuggingFace model dynamically with improved error handling and PEFT support"""
         try:
             model_name = model_path or self.model_name
             logger.info(f"Loading model: {model_name}")
             
-            # Load tokenizer first with error handling
-            self.tokenizer = self._load_tokenizer_safely(model_name)
+            # Check if this is a PEFT model
+            self.is_peft_model = self._check_if_peft_model(model_name)
+            logger.info(f"PEFT model detected: {self.is_peft_model}")
             
-            # Detect task type from model config
-            self.task_type = self._detect_task_type(model_name)
-            
-            # Configure quantization if enabled
-            quantization_config = None
-            if self.use_quantization and torch.cuda.is_available():
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4"
-                )
-            
-            # Load model based on detected task with error handling
-            self.model = self._load_model_safely(model_name, quantization_config)
+            if self.is_peft_model:
+                # Load PEFT model
+                self._load_peft_model(model_name)
+            else:
+                # Load regular model
+                self._load_regular_model(model_name)
             
             # Create pipeline
             self._create_pipeline()
             
-            logger.info(f"✅ Model loaded successfully: {model_name} ({self.task_type})")
+            logger.info(f"✅ Model loaded successfully: {model_name} ({'PEFT' if self.is_peft_model else 'Regular'})")
             
         except Exception as e:
             logger.error(f"❌ Error loading model {model_name}: {e}")
             # Fallback to a simple working model
             self._load_fallback_model()
+    
+    def _load_peft_model(self, model_name: str):
+        """Load PEFT/LoRA model"""
+        try:
+            # Import PEFT
+            from peft import PeftModel, PeftConfig
+            
+            logger.info("Loading PEFT/LoRA model...")
+            
+            # Get base model name
+            base_model_name = self._get_base_model_name(model_name)
+            logger.info(f"Base model: {base_model_name}")
+            
+            # Load tokenizer from the fine-tuned model (it might have special tokens)
+            self.tokenizer = self._load_tokenizer_safely(model_name)
+            
+            # Detect task type
+            self.task_type = self._detect_task_type(base_model_name)
+            
+            # Load base model
+            logger.info("Loading base model...")
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_name,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                device_map="auto" if torch.cuda.is_available() else None,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True
+            )
+            
+            # Load PEFT adapter
+            logger.info("Loading PEFT adapter...")
+            self.model = PeftModel.from_pretrained(
+                base_model, 
+                model_name,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            )
+            
+            logger.info("✅ PEFT model loaded successfully")
+            
+        except ImportError:
+            logger.error("❌ PEFT library not available. Installing...")
+            # Try to install PEFT
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "peft"])
+            
+            # Try again
+            from peft import PeftModel, PeftConfig
+            self._load_peft_model(model_name)
+            
+        except Exception as e:
+            logger.error(f"❌ PEFT model loading failed: {e}")
+            raise e
+    
+    def _load_regular_model(self, model_name: str):
+        """Load regular (non-PEFT) model"""
+        # Load tokenizer first with error handling
+        self.tokenizer = self._load_tokenizer_safely(model_name)
+        
+        # Detect task type from model config
+        self.task_type = self._detect_task_type(model_name)
+        
+        # Configure quantization if enabled
+        quantization_config = None
+        if self.use_quantization and torch.cuda.is_available():
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+        
+        # Load model based on detected task with error handling
+        self.model = self._load_model_safely(model_name, quantization_config)
     
     def _load_tokenizer_safely(self, model_name: str):
         """Load tokenizer with multiple fallback strategies"""
@@ -189,6 +298,7 @@ class UniversalModel(BaseModel):
             
             self.model = AutoModelForCausalLM.from_pretrained("gpt2")
             self.task_type = "text-generation"
+            self.is_peft_model = False
             
             self._create_pipeline()
             
@@ -307,7 +417,8 @@ class UniversalModel(BaseModel):
                 'response': cleaned_response,
                 'confidence': self._calculate_confidence(cleaned_response),
                 'model_name': self.model_name,
-                'task_type': self.task_type
+                'task_type': self.task_type,
+                'is_peft': self.is_peft_model
             }
             
         except Exception as e:
@@ -451,5 +562,6 @@ class UniversalModel(BaseModel):
             'max_length': self.max_length,
             'quantized': self.use_quantization,
             'model_loaded': self.model is not None,
-            'pipeline_ready': self.pipeline is not None
+            'pipeline_ready': self.pipeline is not None,
+            'is_peft_model': self.is_peft_model
         }
