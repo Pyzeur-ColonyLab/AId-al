@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# 💬 Simple AI Chatbot Deployment Script
+# 💬 Simple AI Chatbot Deployment Script (Fixed)
 # Lightweight deployment without database - just pure chatbot functionality
-# Works with any HuggingFace model on Amazon Linux
+# Uses existing configuration structure to avoid Pydantic validation errors
 
 set -e
 
-echo "💬 Simple AI Chatbot Deployment"
-echo "==============================="
+echo "💬 Simple AI Chatbot Deployment (Fixed)"
+echo "======================================="
 echo "Lightweight setup - No database required"
-echo "Perfect for quick testing and simple chatbots"
+echo "Compatible with existing settings structure"
 echo ""
 
 # Colors
@@ -26,6 +26,76 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 print_chatbot() { echo -e "${CYAN}[CHATBOT]${NC} $1"; }
 
+# Quick fix function
+quick_fix() {
+    print_status "Applying quick fix for existing deployment..."
+    
+    # Stop the container
+    docker-compose -f docker-compose.simple.yml down 2>/dev/null || true
+    
+    # Create a clean .env using only supported variables
+    cat > .env << 'EOF'
+# Basic Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=your_token_here
+MODEL_NAME=gpt2
+HF_TOKEN=
+
+# Model Parameters
+TEMPERATURE=0.7
+MAX_LENGTH=100
+DEVICE=cpu
+USE_QUANTIZATION=false
+BATCH_SIZE=1
+
+# Database (required by settings but can point to dummy)
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=dummy_db
+DB_USER=dummy_user
+DB_PASSWORD=dummy_pass
+
+# Redis (optional)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Application
+DEBUG=false
+LOG_LEVEL=INFO
+MAX_WORKERS=2
+
+# Optional
+ADMIN_USERS=
+ALLOWED_USERS=
+EOF
+
+    # Use minimal docker-compose that works with current structure
+    cat > docker-compose.minimal.yml << 'EOF'
+version: '3.8'
+
+services:
+  simple_bot:
+    build: .
+    container_name: simple_ai_chatbot
+    env_file:
+      - .env
+    volumes:
+      - ./models:/app/models
+      - huggingface_cache:/tmp/huggingface
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+volumes:
+  huggingface_cache:
+EOF
+
+    print_success "Quick fix applied ✓"
+}
+
 # Check system requirements
 check_requirements() {
     print_status "Checking system requirements..."
@@ -36,7 +106,6 @@ check_requirements() {
         print_success "Memory: ${total_mem}GB available ✓"
     else
         print_warning "Low memory detected: ${total_mem}GB"
-        echo "Consider using smaller models like gpt2 or DistilBERT"
     fi
     
     # Check available storage
@@ -53,20 +122,14 @@ check_requirements() {
 install_docker() {
     print_status "Installing Docker..."
     
-    # Detect OS
     if [[ -f /etc/os-release ]]; then
         source /etc/os-release
         if [[ "$NAME" == *"Amazon Linux"* ]]; then
-            # Amazon Linux
             sudo yum update -y
             sudo yum install -y docker
         elif [[ "$NAME" == *"Ubuntu"* ]] || [[ "$NAME" == *"Debian"* ]]; then
-            # Ubuntu/Debian
             sudo apt update
             sudo apt install -y docker.io
-        else
-            print_error "Unsupported OS. Please install Docker manually."
-            exit 1
         fi
     fi
     
@@ -88,104 +151,14 @@ install_docker_compose() {
         sudo pip3 install docker-compose
     elif command -v apt &> /dev/null; then
         sudo apt install -y docker-compose
-    else
-        print_error "Cannot install Docker Compose. Please install manually."
-        exit 1
     fi
     
     print_success "Docker Compose installed ✓"
 }
 
-# Create simple chatbot configuration
-setup_simple_chatbot() {
-    print_chatbot "Setting up simple chatbot configuration..."
-    
-    # Create minimal docker-compose for chatbot only
-    cat > docker-compose.simple.yml << 'EOF'
-version: '3.8'
-
-services:
-  chatbot:
-    build: .
-    container_name: simple_ai_chatbot
-    env_file:
-      - .env
-    environment:
-      - SIMPLE_MODE=true
-      - USE_DATABASE=false
-      - USE_REDIS=false
-    volumes:
-      - ./models:/app/models
-      - ./logs:/app/logs
-      - huggingface_cache:/tmp/huggingface
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-        reservations:
-          memory: 1G
-
-volumes:
-  huggingface_cache:
-EOF
-
-    print_success "Simple chatbot configuration created ✓"
-}
-
-# Create minimal Dockerfile for chatbot
-create_simple_dockerfile() {
-    print_chatbot "Creating optimized Dockerfile..."
-    
-    # Backup original Dockerfile if it exists
-    if [[ -f Dockerfile ]]; then
-        cp Dockerfile Dockerfile.backup
-    fi
-    
-    cat > Dockerfile.simple << 'EOF'
-FROM python:3.9-slim
-
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install additional dependencies for simple mode
-RUN pip install --no-cache-dir \
-    python-telegram-bot==20.3 \
-    transformers==4.30.0 \
-    torch==2.0.0 \
-    accelerate==0.20.0
-
-# Copy application code
-COPY . .
-
-# Create directories
-RUN mkdir -p models logs
-
-# Expose port (optional)
-EXPOSE 8000
-
-# Health check
-HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
-
-# Run the bot
-CMD ["python", "app.py"]
-EOF
-
-    print_success "Simple Dockerfile created ✓"
-}
-
-# Configure the chatbot
+# Configure the simple chatbot
 configure_simple_chatbot() {
-    print_chatbot "Configuring your AI chatbot..."
+    print_chatbot "Configuring your simple AI chatbot..."
     
     echo ""
     echo "💬 Simple Chatbot Configuration"
@@ -200,15 +173,15 @@ configure_simple_chatbot() {
         fi
     done
     
-    # Model selection for simple setup
+    # Simple model selection
     echo ""
     echo "🎯 Choose your AI model:"
-    echo "1) gpt2 (Fast, lightweight - 124MB)"
+    echo "1) gpt2 (Lightweight - 124MB)"
     echo "2) microsoft/DialoGPT-small (Good chat - 117MB)"
     echo "3) microsoft/DialoGPT-medium (Better chat - 345MB)"
     echo "4) distilgpt2 (Very fast - 82MB)"
-    echo "5) Pyzeur/Code-du-Travail-mistral-finetune (Legal assistant - 7GB)"
-    echo "6) Custom model name"
+    echo "5) Pyzeur/Code-du-Travail-mistral-finetune (Legal assistant)"
+    echo "6) Custom model"
     echo ""
     
     read -p "Choose option (1-6): " model_choice
@@ -233,18 +206,14 @@ configure_simple_chatbot() {
         5) 
             model_name="Pyzeur/Code-du-Travail-mistral-finetune"
             memory_limit="8G"
-            echo ""
-            print_warning "This model requires a HuggingFace token and significant memory"
             read -p "🤗 HuggingFace Token: " hf_token
             ;;
         6) 
-            read -p "Enter custom model name: " custom_model
-            model_name="$custom_model"
+            read -p "Enter model name: " model_name
             memory_limit="4G"
             read -p "🤗 HuggingFace Token (if needed): " hf_token
             ;;
         *) 
-            print_warning "Invalid choice, using default model"
             model_name="gpt2"
             memory_limit="2G"
             ;;
@@ -252,7 +221,6 @@ configure_simple_chatbot() {
     
     # Optional settings
     echo ""
-    echo "⚙️ Optional Settings:"
     read -p "🌡️  Temperature (0.1-1.0, default 0.7): " temperature
     temperature=${temperature:-0.7}
     
@@ -261,65 +229,92 @@ configure_simple_chatbot() {
     
     read -p "👑 Admin user ID (optional): " admin_user
     
-    # Create simple .env file
-    print_chatbot "Creating configuration file..."
+    # Create simple .env file with only supported variables
+    print_chatbot "Creating configuration..."
     
-    cat > .env.simple << EOF
-# Simple Chatbot Configuration
+    cat > .env << EOF
+# Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN=$telegram_token
+
+# Model Configuration
 MODEL_NAME=$model_name
 HF_TOKEN=${hf_token:-}
 
-# Simple mode settings
-SIMPLE_MODE=true
-USE_DATABASE=false
-USE_REDIS=false
-
-# Model parameters
+# Model Parameters
 TEMPERATURE=$temperature
 MAX_LENGTH=$max_length
 DEVICE=cpu
 USE_QUANTIZATION=false
-
-# Optional admin
-ADMIN_USERS=${admin_user:-}
-
-# Logging
-LOG_LEVEL=INFO
-ENABLE_CONVERSATION_LOGGING=false
-
-# Performance
 BATCH_SIZE=1
+
+# Required Database Settings (dummy values for simple mode)
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=dummy_db
+DB_USER=dummy_user
+DB_PASSWORD=dummy_pass
+
+# Optional Redis Settings
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Application Settings
+DEBUG=false
+LOG_LEVEL=INFO
 MAX_WORKERS=2
 
-# Memory limit for docker
-MEMORY_LIMIT=$memory_limit
+# User Management
+ADMIN_USERS=${admin_user:-}
+ALLOWED_USERS=
+
+# Feature Flags (disable complex features)
+ENABLE_URL_RESOURCES=false
+ENABLE_SMART_CONTRACTS=false
+ENABLE_METRICS=false
 EOF
 
-    cp .env.simple .env
-    
     print_success "Configuration complete ✓"
+}
+
+# Create minimal docker compose
+create_minimal_compose() {
+    print_chatbot "Creating minimal Docker configuration..."
+    
+    cat > docker-compose.minimal.yml << EOF
+version: '3.8'
+
+services:
+  simple_bot:
+    build: .
+    container_name: simple_ai_chatbot
+    env_file:
+      - .env
+    volumes:
+      - ./models:/app/models
+      - huggingface_cache:/tmp/huggingface
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: $memory_limit
+        reservations:
+          memory: 512M
+
+volumes:
+  huggingface_cache:
+EOF
+
+    print_success "Minimal configuration created ✓"
 }
 
 # Deploy the simple chatbot
 deploy_simple_chatbot() {
-    print_chatbot "Deploying your AI chatbot..."
+    print_chatbot "Deploying simple AI chatbot..."
     
-    # Create logs directory
-    mkdir -p logs models
+    mkdir -p models logs
     
-    # Update docker-compose with memory limit
-    if [[ -n "$memory_limit" ]]; then
-        sed -i "s/memory: 4G/memory: $memory_limit/" docker-compose.simple.yml
-    fi
-    
-    # Use simple Dockerfile
-    if [[ -f Dockerfile.simple ]]; then
-        cp Dockerfile.simple Dockerfile
-    fi
-    
-    # Create simple monitoring script
-    cat > monitor_simple.sh << 'EOF'
+    # Create monitoring script
+    cat > monitor_minimal.sh << 'EOF'
 #!/bin/bash
 echo "💬 Simple Chatbot Monitoring"
 echo "============================"
@@ -327,75 +322,70 @@ echo ""
 echo "📊 System Resources:"
 free -h
 echo ""
-echo "🤖 Chatbot Status:"
-docker-compose -f docker-compose.simple.yml ps
+echo "🤖 Bot Status:"
+docker-compose -f docker-compose.minimal.yml ps
 echo ""
-echo "📈 Container Resources:"
-docker stats --no-stream simple_ai_chatbot 2>/dev/null || echo "Chatbot not running"
+echo "📈 Memory Usage:"
+docker stats --no-stream simple_ai_chatbot 2>/dev/null || echo "Bot not running"
 echo ""
 echo "📋 Recent Logs:"
-docker-compose -f docker-compose.simple.yml logs --tail=5 chatbot 2>/dev/null || echo "No logs available"
+docker-compose -f docker-compose.minimal.yml logs --tail=10 simple_bot 2>/dev/null || echo "No logs yet"
 EOF
 
-    chmod +x monitor_simple.sh
+    chmod +x monitor_minimal.sh
     
     print_status "Building and starting chatbot..."
     
-    # Build and start
-    docker-compose -f docker-compose.simple.yml up -d --build
+    # Build and start with minimal compose
+    docker-compose -f docker-compose.minimal.yml up -d --build
     
-    print_success "🎉 Simple AI Chatbot deployed successfully!"
+    print_success "🎉 Simple AI Chatbot deployed!"
     
     echo ""
-    echo "💬 Your AI Chatbot is Ready!"
-    echo "============================"
+    echo "💬 Your Simple AI Chatbot is Ready!"
+    echo "==================================="
     echo ""
     echo "🤖 Model: $model_name"
     echo "🧠 Memory: $memory_limit allocated"
     echo "🌡️  Temperature: $temperature"
     echo "📏 Max length: $max_length tokens"
-    echo "📱 Telegram: Active"
     echo ""
     echo "🔧 Management Commands:"
-    echo "  📊 Status:     ./monitor_simple.sh"
-    echo "  📋 Logs:       docker-compose -f docker-compose.simple.yml logs -f chatbot"
-    echo "  🔄 Restart:    docker-compose -f docker-compose.simple.yml restart"
-    echo "  🛑 Stop:       docker-compose -f docker-compose.simple.yml down"
+    echo "  📊 Status:     ./monitor_minimal.sh"
+    echo "  📋 Logs:       docker-compose -f docker-compose.minimal.yml logs -f"
+    echo "  🔄 Restart:    docker-compose -f docker-compose.minimal.yml restart"
+    echo "  🛑 Stop:       docker-compose -f docker-compose.minimal.yml down"
     echo ""
-    echo "🤖 Bot Commands:"
-    echo "  /start - Start chatting"
-    echo "  /chat <message> - Chat with AI"
-    echo "  /info - Bot information"
-    echo ""
-    echo "💡 Example: /chat Hello, how are you?"
+    echo "🤖 Try these commands in Telegram:"
+    echo "  /start"
+    echo "  /chat Hello, how are you?"
+    echo "  /info"
     echo ""
 }
 
-# Simple health check
+# Health check
 health_check_simple() {
     print_chatbot "Checking chatbot health..."
     
-    sleep 15  # Wait for startup
+    sleep 15
     
-    if docker-compose -f docker-compose.simple.yml ps | grep -q "Up"; then
+    if docker-compose -f docker-compose.minimal.yml ps | grep -q "Up"; then
         print_success "Chatbot is running ✓"
+        
+        # Check logs for successful startup
+        if docker-compose -f docker-compose.minimal.yml logs simple_bot | grep -q "Bot started\|Model loaded\|telegram"; then
+            print_success "Bot appears to be working ✓"
+        else
+            print_warning "Bot may still be initializing..."
+        fi
     else
         print_error "Chatbot failed to start"
-        echo "Check logs with: docker-compose -f docker-compose.simple.yml logs chatbot"
+        echo "Check logs: docker-compose -f docker-compose.minimal.yml logs simple_bot"
         return 1
     fi
-    
-    # Check if model loaded
-    if docker-compose -f docker-compose.simple.yml logs chatbot | grep -q "Model loaded\|Bot started\|Ready"; then
-        print_success "AI model loaded successfully ✓"
-    else
-        print_warning "Model still loading... This may take a few minutes"
-    fi
-    
-    print_success "✨ Your AI chatbot is ready to chat!"
 }
 
-# Main deployment function
+# Main function
 main() {
     echo ""
     print_status "Starting simple chatbot deployment..."
@@ -403,89 +393,66 @@ main() {
     
     check_requirements
     
-    # Install Docker if needed
     if ! command -v docker &> /dev/null; then
         install_docker
         print_warning "Please log out and log back in, then run this script again"
         exit 0
     fi
     
-    # Install Docker Compose if needed
     if ! command -v docker-compose &> /dev/null; then
         install_docker_compose
     fi
     
-    setup_simple_chatbot
-    create_simple_dockerfile
     configure_simple_chatbot
+    create_minimal_compose
     deploy_simple_chatbot
     health_check_simple
     
     echo ""
-    read -p "Would you like to view the chatbot logs? (y/n): " show_logs
+    read -p "View chatbot logs? (y/n): " show_logs
     if [[ "$show_logs" =~ ^[Yy]$ ]]; then
-        print_chatbot "Showing logs (Ctrl+C to exit)..."
-        docker-compose -f docker-compose.simple.yml logs -f chatbot
+        docker-compose -f docker-compose.minimal.yml logs -f simple_bot
     fi
 }
 
-# Script management commands
+# Script commands
 case "${1:-}" in
+    "fix")
+        quick_fix
+        print_success "Applied quick fix. Now run: docker-compose -f docker-compose.minimal.yml up -d --build"
+        ;;
     "logs")
-        docker-compose -f docker-compose.simple.yml logs -f chatbot
+        docker-compose -f docker-compose.minimal.yml logs -f simple_bot
         ;;
     "status")
-        ./monitor_simple.sh
+        ./monitor_minimal.sh 2>/dev/null || echo "Run the script first to create monitoring"
         ;;
     "restart")
-        print_chatbot "Restarting chatbot..."
-        docker-compose -f docker-compose.simple.yml restart
-        print_success "Chatbot restarted ✓"
+        docker-compose -f docker-compose.minimal.yml restart
         ;;
     "stop")
-        print_chatbot "Stopping chatbot..."
-        docker-compose -f docker-compose.simple.yml down
-        print_success "Chatbot stopped ✓"
+        docker-compose -f docker-compose.minimal.yml down
         ;;
     "start")
-        print_chatbot "Starting chatbot..."
-        docker-compose -f docker-compose.simple.yml up -d
-        print_success "Chatbot started ✓"
-        ;;
-    "update")
-        print_chatbot "Updating chatbot..."
-        git pull
-        docker-compose -f docker-compose.simple.yml up -d --build
-        print_success "Chatbot updated ✓"
-        ;;
-    "monitor")
-        ./monitor_simple.sh
+        docker-compose -f docker-compose.minimal.yml up -d
         ;;
     "clean")
-        print_chatbot "Cleaning up..."
-        docker-compose -f docker-compose.simple.yml down -v
+        docker-compose -f docker-compose.minimal.yml down -v
         docker system prune -f
-        print_success "Cleanup complete ✓"
         ;;
     "")
         main
         ;;
     *)
-        echo "Usage: $0 [logs|status|restart|stop|start|update|monitor|clean]"
+        echo "Usage: $0 [fix|logs|status|restart|stop|start|clean]"
         echo ""
-        echo "💬 Simple AI Chatbot Management"
-        echo "==============================="
-        echo ""
-        echo "Commands:"
-        echo "  logs    - Show chatbot logs"
-        echo "  status  - Show status and monitoring"
-        echo "  restart - Restart the chatbot"
-        echo "  stop    - Stop the chatbot"
-        echo "  start   - Start the chatbot"
-        echo "  update  - Update and rebuild"
-        echo "  monitor - Show system monitoring"
-        echo "  clean   - Clean up everything"
-        echo ""
-        echo "Run without arguments for interactive setup"
+        echo "💬 Simple Chatbot Commands:"
+        echo "  fix     - Quick fix for existing issues"
+        echo "  logs    - Show logs"
+        echo "  status  - Show status"
+        echo "  restart - Restart bot"
+        echo "  stop    - Stop bot"
+        echo "  start   - Start bot"
+        echo "  clean   - Clean everything"
         ;;
 esac
