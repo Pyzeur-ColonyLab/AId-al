@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+  mistral_bot:
+    build: .
+    container_name: your_lora_legal_ai
+    env_file:
+      - .env
+    command: python app_your_lora_working.py
+    volumes:
+      - ./models:/app/models
+      - huggingface_cache:/tmp/huggingface
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 9G
+        reservations:
+          memory: 4G
+    shm_size: 2g
+volumes:
+  huggingface_cache:

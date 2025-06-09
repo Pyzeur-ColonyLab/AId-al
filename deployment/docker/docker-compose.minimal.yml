@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+  simple_bot:
+    build: .
+    container_name: simple_ai_chatbot
+    env_file:
+      - .env
+    command: python app_simple.py
+    volumes:
+      - ./models:/app/models
+      - huggingface_cache:/tmp/huggingface
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 12G  # Increased for Mistral
+        reservations:
+          memory: 4G
+    shm_size: 2g       # Shared memory for model loading
+volumes:
+  huggingface_cache:
